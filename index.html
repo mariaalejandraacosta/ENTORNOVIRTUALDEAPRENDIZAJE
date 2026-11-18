@@ -662,4 +662,143 @@ if(resourceFilter){let currentResourceFilter='todos';const tiles=Array.from(docu
   box-shadow: 0 6px 18px rgba(29, 67, 55, .10) !important;
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<div id="accessGate" class="access-gate" role="dialog" aria-modal="true" aria-labelledby="accessTitle">
+  <div class="access-card">
+    <div class="brandmark">🌱</div><div class="eyebrow">ENTORNO VIRTUAL DE APRENDIZAJE</div>
+    <h1 id="accessTitle">Exploradores de la Naturaleza</h1>
+    <p>Selecciona cómo deseas ingresar.</p>
+    <div class="access-actions"><button class="btn primary" id="chooseStudent">Ingresar como estudiante</button><button class="btn outline" id="chooseTeacher">Ingresar como profesor</button></div>
+    <div id="studentAccess" hidden><label for="studentFullName">Nombre de usuario</label><input class="field" id="studentFullName" autocomplete="name" maxlength="120" placeholder="Escribe tu nombre completo"><small>Tu nombre completo será tu identificación dentro de la plataforma.</small><button class="btn dark" id="studentEnter">Entrar a la plataforma</button></div>
+    <div id="teacherAccess" hidden><label for="teacherEmail">Correo del profesor</label><input class="field" id="teacherEmail" type="email" autocomplete="username" placeholder="Correo electrónico"><label for="teacherPassword">Contraseña</label><input class="field" id="teacherPassword" type="password" autocomplete="current-password" placeholder="Contraseña"><button class="btn dark" id="teacherEnter">Iniciar sesión</button></div>
+    <p class="feedback" id="accessFeedback" aria-live="polite"></p>
+  </div>
+</div>
+<style>
+.access-gate{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:22px;background:linear-gradient(135deg,#e6f4e9,#e7f2ff)}
+.access-card{width:min(100%,480px);padding:34px;border-radius:24px;background:#fff;box-shadow:0 18px 55px rgba(36,76,58,.16);text-align:center}
+.access-card .brandmark{font-size:42px;margin-bottom:8px}.access-card h1{font-size:clamp(27px,5vw,36px);color:#244d40;margin:10px 0}.access-card>p{color:#5d7069}.access-actions{display:grid;gap:12px;margin:24px 0}.access-card [hidden]{display:none!important}.access-card label{display:block;text-align:left;margin:14px 0 6px;font-weight:700;color:#34564b}.access-card .field{width:100%;margin-bottom:8px}.access-card small{display:block;text-align:left;color:#60766d;margin:4px 0 16px}.access-card #studentAccess .btn,.access-card #teacherAccess .btn{width:100%;margin-top:12px}.access-card .feedback{min-height:22px}
+#quizTimer{font-weight:700;color:#9b4c24;margin:8px 0 14px}#teacherPanel{margin-top:22px}#teacherPanel table{width:100%;border-collapse:collapse;font-size:14px}#teacherPanel th,#teacherPanel td{padding:9px;border-bottom:1px solid #dce7e1;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+</style>
+<script>
+(function(){
+ const SUPABASE_URL='https://dkshyrzwpvqmtzbmvswo.supabase.co';
+ const SUPABASE_PUBLIC_KEY='sb_publishable_zL0aqaVI2I4Pk2JT6xcF4w_NYyIosN0';
+ const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLIC_KEY);
+ const gate=document.getElementById('accessGate'), shell=document.querySelector('.shell');
+ const studentBox=document.getElementById('studentAccess'),teacherBox=document.getElementById('teacherAccess'),accessMsg=document.getElementById('accessFeedback');
+ let studentName='', teacherMode=false, quizDelivery=null, quizStartedAt=null, quizTimerInterval=null, selfDelivery=null;
+ const answerKey={q1:'b',q2:'c',q3:'a',q4:'b',q5:'c',q6:'a',q7:'b',q8:'a',q9:'b',q10:'c',q11:'a',q12:'b',q13:'c',q14:'b',q15:'a'};
+ const $id=id=>document.getElementById(id);
+ function msg(t,good=false){accessMsg.textContent=t;accessMsg.className='feedback '+(good?'good':'bad')}
+ function unlock(){gate.style.display='none';shell.style.display='';}
+ shell.style.display='none';
+ $id('chooseStudent').onclick=()=>{studentBox.hidden=false;teacherBox.hidden=true;msg('')};
+ $id('chooseTeacher').onclick=()=>{teacherBox.hidden=false;studentBox.hidden=true;msg('')};
+ $id('studentEnter').onclick=async()=>{
+   const name=$id('studentFullName').value.trim();
+   if(name.length<3||name.length>120)return msg('Escribe tu nombre completo (entre 3 y 120 caracteres).');
+   $id('studentEnter').disabled=true;msg('Ingresando…');
+   const {data,error}=await sb.rpc('registrar_estudiante',{p_nombre_completo:name});
+   $id('studentEnter').disabled=false;
+   if(error)return msg('No se pudo registrar el ingreso: '+error.message);
+   studentName=name;sessionStorage.setItem('exploradores_student_name',name);teacherMode=false;unlock();
+ };
+ $id('teacherEnter').onclick=async()=>{
+   const email=$id('teacherEmail').value.trim(),password=$id('teacherPassword').value;
+   if(!email||!password)return msg('Escribe el correo y la contraseña del profesor.');
+   $id('teacherEnter').disabled=true;msg('Verificando acceso…');
+   const {data,error}=await sb.auth.signInWithPassword({email,password});
+   $id('teacherEnter').disabled=false;
+   if(error)return msg('No se pudo iniciar sesión: '+error.message);
+   teacherMode=true;studentName='';unlock();showTeacherPanel();
+ };
+ // No se restaura automáticamente un nombre en otro equipo o navegador: el estudiante siempre puede volver a entrar escribiéndolo.
+ // Evaluación: la hora de inicio procede del servidor de Supabase.
+ const quiz=$id('quiz');
+ if(quiz){
+   const timer=document.createElement('div');timer.id='quizTimer';timer.setAttribute('aria-live','polite');timer.textContent='Tiempo disponible: 90:00';
+   const start=document.createElement('button');start.className='btn primary';start.type='button';start.id='startQuizRemote';start.textContent='Comenzar evaluación (90 minutos)';
+   quiz.insertBefore(start,quiz.querySelector('.question'));
+   quiz.insertBefore(timer,quiz.querySelector('.question'));
+   const questionNodes=Array.from(quiz.querySelectorAll('.question'));
+   questionNodes.forEach(n=>n.hidden=true);
+   $id('submitQuiz').disabled=true;$id('resetQuiz').hidden=true;
+   function collectQuiz(){const out={};for(let i=1;i<=15;i++){const picked=quiz.querySelector('input[name="q'+i+'"]:checked');if(picked)out['q'+i]=picked.value;}return out}
+   function paintTime(){if(!quizStartedAt)return;const remaining=Math.max(0,90*60-Math.floor((Date.now()-quizStartedAt)/1000));timer.textContent='Tiempo disponible: '+String(Math.floor(remaining/60)).padStart(2,'0')+':'+String(remaining%60).padStart(2,'0');if(remaining<=0){clearInterval(quizTimerInterval);finishQuiz(true)}}
+   async function startQuiz(){
+     if(!studentName)return feedback('quizFeedback','Primero ingresa como estudiante.',false);
+     start.disabled=true;start.textContent='Preparando evaluación…';
+     const {data,error}=await sb.rpc('iniciar_actividad',{p_nombre_completo:studentName,p_tipo_actividad:'evaluacion'});
+     start.disabled=false;start.textContent='Comenzar evaluación (90 minutos)';
+     if(error){start.disabled=false;return feedback('quizFeedback','No se pudo iniciar: '+error.message,false)}
+     const row=Array.isArray(data)?data[0]:data;
+     if(!row){return feedback('quizFeedback','Supabase no devolvió el estado de la evaluación.',false)}
+     if(row.estado==='completado'||row.estado==='tiempo_agotado'){
+       start.disabled=true;start.textContent='Evaluación ya presentada';
+       return feedback('quizFeedback','Esta evaluación ya fue presentada con este nombre. Puedes seguir explorando los módulos, pero no volver a enviarla.',false);
+     }
+     quizDelivery=row.entrega_id;quizStartedAt=new Date(row.fecha_inicio).getTime();
+     start.hidden=true;questionNodes.forEach(n=>n.hidden=false);$id('submitQuiz').disabled=false;$id('resetQuiz').hidden=false;
+     paintTime();quizTimerInterval=setInterval(paintTime,1000);
+   }
+   async function finishQuiz(expired=false){
+     if(!quizDelivery||!studentName)return;
+     const responses=collectQuiz();
+     $id('submitQuiz').disabled=true;
+     const {data,error}=await sb.rpc('guardar_respuestas',{p_nombre_completo:studentName,p_entrega_id:quizDelivery,p_respuestas:responses,p_finalizar:true});
+     if(error){$id('submitQuiz').disabled=false;return feedback('quizFeedback','No se pudieron guardar las respuestas: '+error.message,false)}
+     clearInterval(quizTimerInterval);
+     const result=Object.values(responses).length;
+     if(data==='tiempo_agotado'||expired){feedback('quizFeedback','El tiempo terminó. Se guardaron las respuestas que alcanzaste a contestar ('+result+'/15). Esta evaluación quedó cerrada.',false)}
+     else {
+       let score=0;Object.entries(answerKey).forEach(([q,a])=>{if(responses[q]===a)score++});
+       feedback('quizFeedback','Evaluación enviada. Resultado calculado en esta sesión: '+score+'/15 ('+Math.round(score/15*100)+'%).',score>=10);
+       if(typeof mark==='function')mark('cuestionario');
+     }
+     start.hidden=false;start.disabled=true;start.textContent='Evaluación ya presentada';$id('resetQuiz').hidden=true;
+     questionNodes.forEach(n=>n.querySelectorAll('input').forEach(i=>i.disabled=true));
+   }
+   start.onclick=startQuiz;
+   $id('submitQuiz').onclick=()=>{const responses=collectQuiz();if(Object.keys(responses).length<15)return feedback('quizFeedback','Has respondido '+Object.keys(responses).length+' de 15 preguntas. Completa todas antes de enviar.',false);finishQuiz(false)};
+   $id('resetQuiz').onclick=()=>{if(!quizDelivery)return;quiz.querySelectorAll('input[type=radio]').forEach(i=>i.checked=false);feedback('quizFeedback','Puedes continuar. El tiempo sigue corriendo.',false)};
+ }
+ // Autoevaluación: una sola entrega por estudiante; no tiene límite de tiempo.
+ const saveSelf=$id('saveSelf');
+ if(saveSelf){saveSelf.onclick=async()=>{
+   if(!studentName)return feedback('selfFeedback','Primero ingresa como estudiante.',false);
+   const a=document.querySelector('input[name="self1"]:checked'),b=document.querySelector('input[name="self2"]:checked'),reflection=$id('selfReflection').value.trim();
+   if(!a||!b||!reflection)return feedback('selfFeedback','Marca ambas opciones y escribe tu reflexión.',false);
+   saveSelf.disabled=true;
+   if(!selfDelivery){const started=await sb.rpc('iniciar_actividad',{p_nombre_completo:studentName,p_tipo_actividad:'autoevaluacion'});if(started.error){saveSelf.disabled=false;return feedback('selfFeedback','No se pudo iniciar: '+started.error.message,false)}const row=Array.isArray(started.data)?started.data[0]:started.data;if(!row){saveSelf.disabled=false;return feedback('selfFeedback','No se recibió el estado de la autoevaluación.',false)}if(row.estado!=='iniciado'){saveSelf.disabled=false;saveSelf.disabled=true;return feedback('selfFeedback','Esta autoevaluación ya fue presentada con este nombre.',false)}selfDelivery=row.entrega_id;}
+   const payload={self1:a.value,self2:b.value,selfReflection:reflection};
+   const saved=await sb.rpc('guardar_respuestas',{p_nombre_completo:studentName,p_entrega_id:selfDelivery,p_respuestas:payload,p_finalizar:true});
+   saveSelf.disabled=false;
+   if(saved.error)return feedback('selfFeedback','No se pudo guardar: '+saved.error.message,false);
+   saveSelf.disabled=true;document.querySelectorAll('input[name^="self"]').forEach(i=>i.disabled=true);$id('selfReflection').disabled=true;
+   feedback('selfFeedback','Autoevaluación guardada. Ya no se puede volver a enviar con este nombre.');
+   if(typeof mark==='function')mark('autoevaluacion');
+ };
+ }
+ // Panel de consulta del profesor, protegido por la sesión de Supabase y las políticas RLS configuradas.
+ function showTeacherPanel(){
+   const nav=document.getElementById('nav');
+   if(nav&&!document.getElementById('teacherNav')){const b=document.createElement('button');b.id='teacherNav';b.innerHTML='<span class="num">▤</span> Resultados del profesor';b.onclick=()=>{document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));panel.classList.add('active');document.getElementById('crumb').textContent='Resultados del profesor';loadResults()};nav.appendChild(b)}
+   let panel=document.getElementById('teacherPanelPage');
+   if(!panel){panel=document.createElement('section');panel.className='page';panel.id='teacherPanelPage';panel.innerHTML='<div class="modulehead"><div><span class="tag">ÁREA PRIVADA</span><h2>Resultados de estudiantes</h2><p>Consulta los registros y las respuestas enviados.</p></div><div class="bigicon">📋</div></div><div id="teacherPanel" class="card"><button class="btn dark" id="refreshResults">Actualizar resultados</button> <button class="btn outline" id="teacherLogout">Cerrar sesión</button><p id="teacherResultMessage" class="feedback"></p><div style="overflow:auto"><table><thead><tr><th>Estudiante</th><th>Actividad</th><th>Estado</th><th>Inicio</th><th>Finalización</th><th>Calificación</th><th>Respuestas</th></tr></thead><tbody id="teacherRows"></tbody></table></div></div>';
+     document.querySelector('.content').appendChild(panel);
+     $id('refreshResults').onclick=loadResults;
+     $id('teacherLogout').onclick=async()=>{await sb.auth.signOut();location.reload()};
+   }
+   async function loadResults(){
+     const tbody=$id('teacherRows'),m=$id('teacherResultMessage');tbody.innerHTML='';m.textContent='Consultando…';
+     const {data,error}=await sb.from('entregas_actividades').select('id, tipo_actividad, estado, respuestas, calificacion, fecha_inicio, fecha_finalizacion, estudiantes(nombre_completo)').order('fecha_inicio',{ascending:false});
+     if(error){m.textContent='No se pudieron consultar los resultados: '+error.message;return}
+     if(!data.length){m.textContent='Todavía no hay entregas registradas.';return}
+     data.forEach(r=>{const tr=document.createElement('tr');const response=JSON.stringify(r.respuestas||{});[r.estudiantes?.nombre_completo||'—',r.tipo_actividad,r.estado,new Date(r.fecha_inicio).toLocaleString(),r.fecha_finalizacion?new Date(r.fecha_finalizacion).toLocaleString():'—',r.calificacion==null?'Pendiente':r.calificacion+'/15',response].forEach(v=>{const td=document.createElement('td');td.textContent=String(v);tr.appendChild(td)});tbody.appendChild(tr)});m.textContent='Registros encontrados: '+data.length;
+   }
+ }
+ // Se mantiene la navegación y el almacenamiento local de los módulos tal como estaban.
+})();
+</script>
 </body></html>
